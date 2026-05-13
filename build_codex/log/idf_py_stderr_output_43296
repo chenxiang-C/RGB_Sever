@@ -1,0 +1,39 @@
+fatal: detected dubious ownership in repository at 'D:/ESP32/v5.3.4/esp-idf'
+'D:/ESP32/v5.3.4/esp-idf' is owned by:
+	Xiang/78219 (S-1-5-21-1533556857-4173748662-210170288-1001)
+but the current user is:
+	Xiang/CodexSandboxOffline (S-1-5-21-1533556857-4173748662-210170288-1004)
+To add an exception for this directory, call:
+
+	git config --global --add safe.directory D:/ESP32/v5.3.4/esp-idf
+fatal: detected dubious ownership in repository at 'D:/ESP32/v5.3.4/esp-idf'
+'D:/ESP32/v5.3.4/esp-idf' is owned by:
+	Xiang/78219 (S-1-5-21-1533556857-4173748662-210170288-1001)
+but the current user is:
+	Xiang/CodexSandboxOffline (S-1-5-21-1533556857-4173748662-210170288-1004)
+To add an exception for this directory, call:
+
+	git config --global --add safe.directory D:/ESP32/v5.3.4/esp-idf
+fatal: detected dubious ownership in repository at 'D:/ESP32/v5.3.4/esp-idf/components/openthread/openthread'
+'D:/ESP32/v5.3.4/esp-idf/components/openthread/openthread/.git' is owned by:
+	Xiang/78219 (S-1-5-21-1533556857-4173748662-210170288-1001)
+but the current user is:
+	Xiang/CodexSandboxOffline (S-1-5-21-1533556857-4173748662-210170288-1004)
+To add an exception for this directory, call:
+
+	git config --global --add safe.directory D:/ESP32/v5.3.4/esp-idf/components/openthread/openthread
+Traceback (most recent call last):
+  File "D:\ESP32\v5.3.4\esp-idf\components\esp_rom\gen_gdbinit.py", line 72, in <module>
+    gdbinit_lines = generate_gdbinit_rom_add_symbols(target)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\ESP32\v5.3.4\esp-idf\components\esp_rom\gen_gdbinit.py", line 32, in generate_gdbinit_rom_add_symbols
+    raise EnvironmentError(
+OSError: ESP_ROM_ELF_DIR environment variable is not defined. Please try to run IDF "install" and "export" scripts.
+CMake Warning at D:/ESP32/v5.3.4/esp-idf/tools/cmake/gdbinit.cmake:52 (message):
+  Error while generating esp_rom gdbinit
+Call Stack (most recent call first):
+  D:/ESP32/v5.3.4/esp-idf/tools/cmake/project.cmake:356 (__generate_gdbinit)
+  D:/ESP32/v5.3.4/esp-idf/tools/cmake/project.cmake:924 (__project_info)
+  CMakeLists.txt:12 (project)
+
+

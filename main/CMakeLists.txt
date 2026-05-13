@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "APP/my_lvgl.c"
+        "APP/ws2812b.c"
+        "iot/now.c"
+    INCLUDE_DIRS 
+        "."
+        "APP"
+        "iot"
+    REQUIRES
+        Hardware
+        nvs_flash
+        esp_event
+        esp_netif
+        esp_wifi
+        esp_timer
+        led_strip
+)

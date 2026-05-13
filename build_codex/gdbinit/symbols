@@ -1,0 +1,9 @@
+
+
+# Load bootloader symbols
+set confirm off
+    add-symbol-file F:/project_master/esp32_now_sever1/build_codex/bootloader/bootloader.elf
+set confirm on
+
+# Load application symbols
+file F:/project_master/esp32_now_sever1/build_codex/esp32_now_sever1.elf

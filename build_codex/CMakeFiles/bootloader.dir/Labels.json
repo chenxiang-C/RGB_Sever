@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "F:/project_master/esp32_now_sever1/build_codex/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}
