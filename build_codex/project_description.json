@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "esp32_now_sever1",
-    "project_version":    "1",
+    "project_version":    "4baae37-dirty",
     "project_path":       "F:/project_master/esp32_now_sever1",
     "idf_path":           "D:/ESP32/v5.3.4/esp-idf",
     "build_dir":          "F:/project_master/esp32_now_sever1/build_codex",
@@ -11,7 +11,7 @@
     "app_elf":            "esp32_now_sever1.elf",
     "app_bin":            "esp32_now_sever1.bin",
     "build_type":         "flash_app",
-    "git_revision":       "HEAD-HASH-NOTFOUND",
+    "git_revision":       "v5.3.4",
     "target":             "esp32",
     "rev":                "0",
     "min_rev":            "0",
@@ -1225,7 +1225,7 @@
             "managed_reqs": [],
             "managed_priv_reqs": [ "espressif__led_strip", "lvgl" ],
             "file": "F:/project_master/esp32_now_sever1/build_codex/esp-idf/main/libmain.a",
-            "sources": [ "F:/project_master/esp32_now_sever1/main/main.c", "F:/project_master/esp32_now_sever1/main/APP/my_lvgl.c", "F:/project_master/esp32_now_sever1/main/APP/ws2812b.c", "F:/project_master/esp32_now_sever1/main/iot/now.c" ],
+            "sources": [ "F:/project_master/esp32_now_sever1/main/main.c", "F:/project_master/esp32_now_sever1/main/APP/my_lvgl.c", "F:/project_master/esp32_now_sever1/main/APP/ui_font_cn_16.c", "F:/project_master/esp32_now_sever1/main/APP/ws2812b.c", "F:/project_master/esp32_now_sever1/main/iot/now.c" ],
             "include_dirs": [ ".", "APP", "iot" ]
         },
         "mbedtls": {

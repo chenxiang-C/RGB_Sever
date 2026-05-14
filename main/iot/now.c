@@ -60,7 +60,9 @@ typedef struct {
 typedef struct {
     uint16_t active_part;
     bool data_send_mode;
+    bool host_bound;
     uint32_t last_host_msg_tick;
+    uint8_t host_mac[ESP_NOW_ETH_ALEN];
     uint8_t last_r;
     uint8_t last_g;
     uint8_t last_b;
@@ -112,6 +114,81 @@ static uint32_t espnow_now_ms(void)
 }
 
 /**
+ * @brief Check whether a MAC address is the ESP-NOW broadcast address.
+ *
+ * @param mac_addr MAC address to inspect.
+ * @return true if all bytes are 0xFF, false otherwise.
+ */
+static bool espnow_is_broadcast_mac(const uint8_t *mac_addr)
+{
+    static const uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    };
+
+    return (mac_addr != NULL) &&
+           (memcmp(mac_addr, broadcast_mac, ESP_NOW_ETH_ALEN) == 0);
+}
+
+/**
+ * @brief Copy the currently bound host MAC address.
+ *
+ * @param host_mac Output buffer for ESP_NOW_ETH_ALEN bytes.
+ * @return true when a host is bound, false while waiting for heartbeat.
+ */
+static bool espnow_get_bound_host(uint8_t *host_mac)
+{
+    bool host_bound = false;
+
+    if (host_mac == NULL) {
+        return false;
+    }
+
+    if (espnow_state_lock(portMAX_DELAY)) {
+        host_bound = s_slave_state.host_bound;
+        if (host_bound) {
+            memcpy(host_mac, s_slave_state.host_mac, ESP_NOW_ETH_ALEN);
+        }
+        espnow_state_unlock();
+    }
+
+    return host_bound;
+}
+
+/**
+ * @brief Decide whether an RX frame may be queued for task-context parsing.
+ *
+ * @param src_mac ESP-NOW source MAC address.
+ * @param dest_mac ESP-NOW destination MAC address.
+ * @return true when the frame is from the bound host, or a broadcast
+ *         candidate while no host is bound.
+ */
+static bool espnow_should_queue_rx(const uint8_t *src_mac,
+                                   const uint8_t *dest_mac)
+{
+    bool should_queue = false;
+
+    if ((src_mac == NULL) || (dest_mac == NULL)) {
+        return false;
+    }
+
+    if (!espnow_state_lock(0U)) {
+        return false;
+    }
+
+    if (s_slave_state.host_bound) {
+        should_queue =
+            (memcmp(src_mac,
+                    s_slave_state.host_mac,
+                    ESP_NOW_ETH_ALEN) == 0);
+    } else {
+        should_queue = espnow_is_broadcast_mac(dest_mac);
+    }
+    espnow_state_unlock();
+
+    return should_queue;
+}
+
+/**
  * @brief 查询当前是否处于颜色数据上报模式。
  *
  * @return true 表示上报颜色数据，false 表示仅发送待机心跳。
@@ -121,7 +198,8 @@ static bool espnow_get_mode(void)
     bool enabled = false;
 
     if (espnow_state_lock(portMAX_DELAY)) {
-        enabled = s_slave_state.data_send_mode;
+        enabled = s_slave_state.host_bound &&
+                  s_slave_state.data_send_mode;
         espnow_state_unlock();
     }
 
@@ -156,6 +234,87 @@ static void espnow_mark_host_alive(void)
         s_slave_state.last_host_msg_tick = espnow_now_ms();
         espnow_state_unlock();
     }
+}
+
+/**
+ * @brief Add a host MAC to the ESP-NOW peer list.
+ *
+ * @param host_mac Host MAC address learned from heartbeat.
+ * @return ESP_OK on success, or the ESP-NOW error code.
+ */
+static esp_err_t espnow_add_host_peer(const uint8_t *host_mac)
+{
+    esp_now_peer_info_t peer = {0};
+
+    if (host_mac == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_now_is_peer_exist(host_mac)) {
+        return ESP_OK;
+    }
+
+    peer.channel = ESPNOW_CHANNEL;
+    peer.ifidx = ESP_IF_WIFI_STA;
+    peer.encrypt = false;
+    memcpy(peer.peer_addr, host_mac, ESP_NOW_ETH_ALEN);
+
+    return esp_now_add_peer(&peer);
+}
+
+/**
+ * @brief Bind the slave to the host that sent a valid broadcast heartbeat.
+ *
+ * @param host_mac Source MAC address from the received ESP-NOW frame.
+ * @return ESP_OK on success, or the ESP-NOW error code.
+ */
+static esp_err_t espnow_bind_host(const uint8_t *host_mac)
+{
+    esp_err_t ret = ESP_OK;
+    bool already_bound = false;
+
+    if (host_mac == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (espnow_state_lock(portMAX_DELAY)) {
+        already_bound =
+            s_slave_state.host_bound &&
+            (memcmp(s_slave_state.host_mac,
+                    host_mac,
+                    ESP_NOW_ETH_ALEN) == 0);
+        espnow_state_unlock();
+    }
+
+    if (already_bound) {
+        espnow_mark_host_alive();
+        return ESP_OK;
+    }
+
+    ret = espnow_add_host_peer(host_mac);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (xSemaphoreTake(s_send_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (s_send_param != NULL) {
+        memcpy(s_send_param->dest_mac, host_mac, ESP_NOW_ETH_ALEN);
+    }
+    xSemaphoreGive(s_send_mutex);
+
+    if (espnow_state_lock(portMAX_DELAY)) {
+        s_slave_state.host_bound = true;
+        s_slave_state.last_host_msg_tick = espnow_now_ms();
+        memcpy(s_slave_state.host_mac, host_mac, ESP_NOW_ETH_ALEN);
+        espnow_state_unlock();
+    }
+
+    ESP_LOGI(TAG, "Host learned from heartbeat: " MACSTR,
+             MAC2STR(host_mac));
+    return ESP_OK;
 }
 
 /**
@@ -222,11 +381,31 @@ static void espnow_accept_part(uint16_t part)
  */
 static void espnow_reset_host_state(uint32_t current_tick)
 {
+    uint8_t old_host_mac[ESP_NOW_ETH_ALEN] = {0};
+    bool remove_peer = false;
+
     if (espnow_state_lock(portMAX_DELAY)) {
+        remove_peer = s_slave_state.host_bound;
+        if (remove_peer) {
+            memcpy(old_host_mac,
+                   s_slave_state.host_mac,
+                   ESP_NOW_ETH_ALEN);
+        }
         s_slave_state.active_part = 0U;
         s_slave_state.data_send_mode = false;
+        s_slave_state.host_bound = false;
         s_slave_state.last_host_msg_tick = current_tick;
+        memset(s_slave_state.host_mac, 0, ESP_NOW_ETH_ALEN);
         espnow_state_unlock();
+    }
+
+    if (remove_peer && esp_now_is_peer_exist(old_host_mac)) {
+        esp_err_t ret = esp_now_del_peer(old_host_mac);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to delete host peer " MACSTR ": %s",
+                     MAC2STR(old_host_mac),
+                     esp_err_to_name(ret));
+        }
     }
 
     ui_update_part_id(0U);
@@ -297,6 +476,11 @@ static esp_err_t espnow_send_payload(const char *payload,
         return ESP_ERR_INVALID_ARG;
     }
 
+    uint8_t host_mac[ESP_NOW_ETH_ALEN] = {0};
+    if (!espnow_get_bound_host(host_mac)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (xSemaphoreTake(s_send_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
@@ -316,6 +500,7 @@ static esp_err_t espnow_send_payload(const char *payload,
     esp_data->crc = esp_crc16_le(UINT16_MAX,
                                  (const uint8_t *)esp_data,
                                  s_send_param->len);
+    memcpy(s_send_param->dest_mac, host_mac, ESP_NOW_ETH_ALEN);
 
     esp_err_t ret = esp_now_send(s_send_param->dest_mac,
                                  s_send_param->buffer,
@@ -448,21 +633,19 @@ static void example_espnow_send_cb(const uint8_t *mac_addr,
  * @param recv_ctx 接收上下文，包含源 MAC。
  * @param data 底层接收缓冲区。
  * @param len 数据长度。
- * @note 仅接收 HOST_MAC_ADDR 的数据；会复制 payload 到堆内存，
- *       所有权转交给 example_espnow_slave_event_task() 释放。
+ * @note 未绑定主机时只接收广播心跳候选帧；绑定后只接收该主机数据。
+ *       payload 会复制到堆内存，所有权转交给事件任务释放。
  */
 static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_ctx,
                                    const uint8_t *data,
                                    int len)
 {
-    const uint8_t host_mac[ESP_NOW_ETH_ALEN] = HOST_MAC_ADDR;
-
     if ((recv_ctx == NULL) || (data == NULL) || (len <= 0) ||
         (s_espnow_queue == NULL)) {
         return;
     }
 
-    if (memcmp(recv_ctx->src_addr, host_mac, ESP_NOW_ETH_ALEN) != 0) {
+    if (!espnow_should_queue_rx(recv_ctx->src_addr, recv_ctx->des_addr)) {
         return;
     }
 
@@ -606,8 +789,9 @@ static void espnow_handle_recv_event(example_espnow_event_recv_cb_t *recv_cb)
                                             &recv_state,
                                             &recv_seq,
                                             &recv_magic);
-    if ((ret != EXAMPLE_ESPNOW_DATA_UNICAST) ||
-        (recv_cb->data_len < (int32_t)sizeof(example_espnow_data_t))) {
+    if ((recv_cb->data_len < (int32_t)sizeof(example_espnow_data_t)) ||
+        ((ret != EXAMPLE_ESPNOW_DATA_UNICAST) &&
+         (ret != EXAMPLE_ESPNOW_DATA_BROADCAST))) {
         (void)slave_send_error_msg();
         return;
     }
@@ -631,6 +815,17 @@ static void espnow_handle_recv_event(example_espnow_event_recv_cb_t *recv_cb)
     (void)recv_state;
     (void)recv_seq;
     (void)recv_magic;
+
+    if (ret == EXAMPLE_ESPNOW_DATA_BROADCAST) {
+        esp_err_t bind_ret = espnow_bind_host(recv_cb->mac_addr);
+        if (bind_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to bind host " MACSTR ": %s",
+                     MAC2STR(recv_cb->mac_addr),
+                     esp_err_to_name(bind_ret));
+            return;
+        }
+    }
+
     espnow_mark_host_alive();
     espnow_handle_part_payload(payload_str);
 }
@@ -693,13 +888,16 @@ void example_espnow_slave_heartbeat_check_task(void *pvParameter)
 
         uint32_t current_tick = espnow_now_ms();
         uint32_t last_tick = 0U;
+        bool host_bound = false;
 
         if (espnow_state_lock(portMAX_DELAY)) {
+            host_bound = s_slave_state.host_bound;
             last_tick = s_slave_state.last_host_msg_tick;
             espnow_state_unlock();
         }
 
-        if ((current_tick - last_tick) > ESPNOW_HOST_TIMEOUT_MS) {
+        if (host_bound &&
+            ((current_tick - last_tick) > ESPNOW_HOST_TIMEOUT_MS)) {
             ESP_LOGW(TAG, "Host timeout, reset to idle mode");
             espnow_reset_host_state(current_tick);
         }
@@ -794,24 +992,6 @@ static esp_err_t espnow_register_callbacks(void)
 }
 
 /**
- * @brief 将固定主机 MAC 加入 ESP-NOW peer 列表。
- *
- * @return 成功返回 ESP_OK，否则返回 esp_now_add_peer() 的错误码。
- */
-static esp_err_t espnow_add_host_peer(void)
-{
-    const uint8_t host_mac[ESP_NOW_ETH_ALEN] = HOST_MAC_ADDR;
-    esp_now_peer_info_t peer = {0};
-
-    peer.channel = ESPNOW_CHANNEL;
-    peer.ifidx = ESP_IF_WIFI_STA;
-    peer.encrypt = false;
-    memcpy(peer.peer_addr, host_mac, ESP_NOW_ETH_ALEN);
-
-    return esp_now_add_peer(&peer);
-}
-
-/**
  * @brief 初始化 ESP-NOW 从机模块。
  *
  * @return 成功返回 ESP_OK，失败返回具体错误码。
@@ -819,7 +999,6 @@ static esp_err_t espnow_add_host_peer(void)
  */
 esp_err_t example_espnow_init(void)
 {
-    const uint8_t host_mac[ESP_NOW_ETH_ALEN] = HOST_MAC_ADDR;
     esp_err_t ret = espnow_create_resources();
 
     if (ret != ESP_OK) {
@@ -833,20 +1012,10 @@ esp_err_t example_espnow_init(void)
         return ret;
     }
 
-    ret = espnow_add_host_peer();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add host peer: " MACSTR,
-                 MAC2STR(host_mac));
-        example_espnow_deinit();
-        return ret;
-    }
-
-    memcpy(s_send_param->dest_mac, host_mac, ESP_NOW_ETH_ALEN);
     s_send_param->magic = SLAVE_MAGIC_NUMBER;
 
     ESP_LOGI(TAG,
-             "ESP-NOW slave ready | id:%lu host:" MACSTR,
-             (unsigned long)SLAVE_MAGIC_NUMBER,
-             MAC2STR(host_mac));
+             "ESP-NOW slave ready | id:%lu waiting for host heartbeat",
+             (unsigned long)SLAVE_MAGIC_NUMBER);
     return ESP_OK;
 }

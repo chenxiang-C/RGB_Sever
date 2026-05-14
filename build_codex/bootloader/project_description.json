@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "bootloader",
-    "project_version":    "1",
+    "project_version":    "v5.3.4",
     "project_path":       "D:/ESP32/v5.3.4/esp-idf/components/bootloader/subproject",
     "idf_path":           "D:/ESP32/v5.3.4/esp-idf",
     "build_dir":          "F:/project_master/esp32_now_sever1/build_codex/bootloader",
@@ -11,7 +11,7 @@
     "app_elf":            "bootloader.elf",
     "app_bin":            "bootloader.bin",
     "build_type":         "flash_app",
-    "git_revision":       "HEAD-HASH-NOTFOUND",
+    "git_revision":       "v5.3.4",
     "target":             "esp32",
     "rev":                "0",
     "min_rev":            "0",

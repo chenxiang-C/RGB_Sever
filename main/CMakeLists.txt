@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "APP/my_lvgl.c"
+        "APP/ui_font_cn_16.c"
         "APP/ws2812b.c"
         "iot/now.c"
     INCLUDE_DIRS 

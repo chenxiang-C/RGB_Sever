@@ -3,13 +3,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "lcd.h"
 #include "lvgl.h"
 #include "now.h"
+#include "sdkconfig.h"
+#include <string.h>
 #include "touch.h"
 
 static const char *TAG = "lvgl_base";
@@ -18,11 +22,43 @@ static const char *TAG = "lvgl_base";
 #define UI_DEFAULT_G             (0U)
 #define UI_DEFAULT_B             (0U)
 #define UI_SLIDER_MAX            (255U)
-#define UI_LVGL_BUF_LINES        (10U)
-#define UI_LVGL_LOCK_TIMEOUT_MS  (50U)
-#define UI_LVGL_TASK_DELAY_MS    (10U)
-#define UI_TOUCH_PHYSICAL_WIDTH  (240)
-#define UI_TICK_PERIOD_US        (1000U)
+#define UI_LVGL_BUF_LINES           (10U)
+#define UI_LVGL_LOCK_TIMEOUT_MS     (50U)
+#define UI_LVGL_TASK_DELAY_MS       (10U)
+#define UI_TOUCH_PHYSICAL_WIDTH     (240)
+#define UI_TICK_PERIOD_US           (1000U)
+#define UI_HEADER_HEIGHT            (48)
+#define UI_MAIN_BOTTOM_PAD          (5)
+#define UI_PAGE_HEIGHT              (LCD_HEIGHT - UI_HEADER_HEIGHT - \
+                                     UI_MAIN_BOTTOM_PAD - 4)
+#define UI_PERF_TIMER_PERIOD_MS     (1000U)
+
+LV_FONT_DECLARE(ui_font_cn_16);
+#define UI_FONT_CN                  (&ui_font_cn_16)
+
+typedef enum {
+    UI_PAGE_COLOR = 0,
+    UI_PAGE_SYSTEM,
+} ui_page_t;
+
+typedef enum {
+    UI_PERF_CPU0 = 0,
+    UI_PERF_CPU1,
+    UI_PERF_HEAP,
+    UI_PERF_INTERNAL_HEAP,
+    UI_PERF_BIGGEST_BLOCK,
+    UI_PERF_MIN_HEAP,
+    UI_PERF_LVGL_MEM,
+    UI_PERF_UPTIME,
+    UI_PERF_ITEM_COUNT,
+} ui_perf_item_t;
+
+#define UI_PERF_CPU_CORES           (2U)
+
+typedef struct {
+    configRUN_TIME_COUNTER_TYPE last_idle[UI_PERF_CPU_CORES];
+    int64_t last_time_us;
+} ui_cpu_monitor_t;
 
 static ui_rgb_color_t s_ui_color = {
     .r = UI_DEFAULT_R,
@@ -35,6 +71,10 @@ static portMUX_TYPE s_ui_color_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static lv_obj_t *s_node_label;
 static lv_obj_t *s_slave_status_label;
+static lv_obj_t *s_page_button_label;
+static lv_obj_t *s_page_button;
+static lv_obj_t *s_color_page;
+static lv_obj_t *s_system_page;
 static lv_obj_t *s_color_preview;
 static lv_obj_t *s_part_label;
 static lv_obj_t *s_slider_r;
@@ -43,6 +83,10 @@ static lv_obj_t *s_slider_b;
 static lv_obj_t *s_label_r;
 static lv_obj_t *s_label_g;
 static lv_obj_t *s_label_b;
+static lv_obj_t *s_perf_labels[UI_PERF_ITEM_COUNT];
+static lv_timer_t *s_perf_timer;
+static ui_page_t s_active_page = UI_PAGE_COLOR;
+static ui_cpu_monitor_t s_cpu_monitor;
 
 static void lvgl_disp_flush_cb(lv_display_t *disp,
                                const lv_area_t *area,
@@ -110,6 +154,84 @@ static void ui_give_lvgl(void)
 }
 
 /**
+ * @brief Apply the common Chinese UI font and text color.
+ *
+ * @param obj LVGL object to style.
+ * @param color Text color.
+ */
+static void ui_apply_text_style(lv_obj_t *obj, lv_color_t color)
+{
+    if (obj == NULL) {
+        return;
+    }
+
+    lv_obj_set_style_text_font(obj, UI_FONT_CN, 0);
+    lv_obj_set_style_text_color(obj, color, 0);
+}
+
+/**
+ * @brief Refresh the page toggle button text.
+ */
+static void ui_update_page_button_text(void)
+{
+    if (s_page_button_label == NULL) {
+        return;
+    }
+
+    if (s_active_page == UI_PAGE_COLOR) {
+        lv_label_set_text(s_page_button_label, "系统");
+    } else {
+        lv_label_set_text(s_page_button_label, "调色");
+    }
+}
+
+/**
+ * @brief Show one of the two UI pages.
+ *
+ * @param page Target page.
+ */
+static void ui_show_page(ui_page_t page)
+{
+    s_active_page = page;
+
+    if (s_color_page != NULL) {
+        if (page == UI_PAGE_COLOR) {
+            lv_obj_remove_flag(s_color_page, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_color_page, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (s_system_page != NULL) {
+        if (page == UI_PAGE_SYSTEM) {
+            lv_obj_remove_flag(s_system_page, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_system_page, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    ui_update_page_button_text();
+}
+
+/**
+ * @brief Page switch button event callback.
+ *
+ * @param event LVGL event object.
+ */
+static void page_button_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    if (s_active_page == UI_PAGE_COLOR) {
+        ui_show_page(UI_PAGE_SYSTEM);
+    } else {
+        ui_show_page(UI_PAGE_COLOR);
+    }
+}
+
+/**
  * @brief RGB 滑块事件回调。
  *
  * @param event LVGL 事件对象。
@@ -129,9 +251,9 @@ static void slider_event_cb(lv_event_t *event)
 
     ui_set_color(color.r, color.g, color.b);
 
-    lv_label_set_text_fmt(s_label_r, "R: %u", color.r);
-    lv_label_set_text_fmt(s_label_g, "G: %u", color.g);
-    lv_label_set_text_fmt(s_label_b, "B: %u", color.b);
+    lv_label_set_text_fmt(s_label_r, "红 %u", color.r);
+    lv_label_set_text_fmt(s_label_g, "绿 %u", color.g);
+    lv_label_set_text_fmt(s_label_b, "蓝 %u", color.b);
     lv_obj_set_style_bg_color(s_color_preview,
                               lv_color_make(color.r, color.g, color.b),
                               0);
@@ -157,12 +279,14 @@ void ui_update_part_id(uint16_t part_id)
     s_current_part = part_id;
     if (s_part_label != NULL) {
         if (part_id == 0U) {
-            lv_label_set_text(s_part_label, "Part: 0 (Idle)");
+            lv_label_set_text(s_part_label, "绘制部位：未分配");
             lv_obj_set_style_text_color(s_part_label,
                                         lv_color_hex(0xAAAAAA),
                                         0);
         } else {
-            lv_label_set_text_fmt(s_part_label, "Part: %u", part_id);
+            lv_label_set_text_fmt(s_part_label,
+                                  "绘制部位：%u",
+                                  part_id);
             lv_obj_set_style_text_color(s_part_label,
                                         lv_color_hex(0xFFFFFF),
                                         0);
@@ -186,13 +310,12 @@ void ui_update_slave_status(bool is_connected)
     }
 
     if (is_connected) {
-        lv_label_set_text(s_slave_status_label, LV_SYMBOL_WIFI " Online");
+        lv_label_set_text(s_slave_status_label, "在线");
         lv_obj_set_style_text_color(s_slave_status_label,
                                     lv_color_hex(0x00FF00),
                                     0);
     } else {
-        lv_label_set_text(s_slave_status_label,
-                          LV_SYMBOL_WARNING " Offline");
+        lv_label_set_text(s_slave_status_label, "离线");
         lv_obj_set_style_text_color(s_slave_status_label,
                                     lv_color_hex(0xFF4444),
                                     0);
@@ -221,7 +344,7 @@ static void create_color_slider(lv_obj_t *parent,
     lv_obj_t *row = lv_obj_create(parent);
 
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, 35);
+    lv_obj_set_height(row, 32);
     lv_obj_set_style_bg_opa(row, 0, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_pad_all(row, 0, 0);
@@ -232,9 +355,9 @@ static void create_color_slider(lv_obj_t *parent,
                           LV_FLEX_ALIGN_CENTER);
 
     *out_label = lv_label_create(row);
-    lv_label_set_text_fmt(*out_label, "%s: %u", name, init_val);
-    lv_obj_set_style_text_color(*out_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_width(*out_label, 60);
+    lv_label_set_text_fmt(*out_label, "%s %u", name, init_val);
+    ui_apply_text_style(*out_label, lv_color_hex(0xFFFFFF));
+    lv_obj_set_width(*out_label, 70);
 
     *out_slider = lv_slider_create(row);
     lv_obj_set_flex_grow(*out_slider, 1);
@@ -265,7 +388,7 @@ static void build_header(lv_obj_t *screen)
 {
     lv_obj_t *header = lv_obj_create(screen);
 
-    lv_obj_set_size(header, lv_pct(100), 40);
+    lv_obj_set_size(header, lv_pct(100), UI_HEADER_HEIGHT);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x2A2A2A), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
@@ -273,21 +396,35 @@ static void build_header(lv_obj_t *screen)
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     s_node_label = lv_label_create(header);
-    lv_obj_align(s_node_label, LV_ALIGN_LEFT_MID, 5, 0);
-    lv_obj_set_style_text_font(s_node_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_node_label, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text_fmt(s_node_label, "Node: %lu",
+    lv_obj_align(s_node_label, LV_ALIGN_LEFT_MID, 8, 0);
+    ui_apply_text_style(s_node_label, lv_color_hex(0xFFFFFF));
+    lv_label_set_text_fmt(s_node_label, "节点 %lu",
                           (unsigned long)SLAVE_MAGIC_NUMBER);
 
     s_slave_status_label = lv_label_create(header);
-    lv_obj_align(s_slave_status_label, LV_ALIGN_RIGHT_MID, -5, 0);
-    lv_obj_set_style_text_font(s_slave_status_label,
-                               &lv_font_montserrat_16,
-                               0);
-    lv_label_set_text(s_slave_status_label, LV_SYMBOL_WARNING " Offline");
+    lv_obj_align(s_slave_status_label, LV_ALIGN_CENTER, 18, 3);
+    ui_apply_text_style(s_slave_status_label, lv_color_hex(0xFF4444));
+    lv_label_set_text(s_slave_status_label, "离线");
     lv_obj_set_style_text_color(s_slave_status_label,
                                 lv_color_hex(0xFF4444),
                                 0);
+
+    s_page_button = lv_button_create(header);
+    lv_obj_set_size(s_page_button, 72, 34);
+    lv_obj_align(s_page_button, LV_ALIGN_RIGHT_MID, -8, 4);
+    lv_obj_set_ext_click_area(s_page_button, 8);
+    lv_obj_set_style_radius(s_page_button, 6, 0);
+    lv_obj_set_style_bg_color(s_page_button, lv_color_hex(0x4A90E2), 0);
+    lv_obj_set_style_pad_all(s_page_button, 0, 0);
+    lv_obj_add_event_cb(s_page_button,
+                        page_button_event_cb,
+                        LV_EVENT_CLICKED,
+                        NULL);
+
+    s_page_button_label = lv_label_create(s_page_button);
+    ui_apply_text_style(s_page_button_label, lv_color_hex(0xFFFFFF));
+    lv_obj_center(s_page_button_label);
+    ui_update_page_button_text();
 }
 
 /**
@@ -300,35 +437,68 @@ static lv_obj_t *build_main_container(lv_obj_t *screen)
 {
     lv_obj_t *main_cont = lv_obj_create(screen);
 
-    lv_obj_set_size(main_cont, lv_pct(94), lv_pct(82));
-    lv_obj_align(main_cont, LV_ALIGN_BOTTOM_MID, 0, -5);
+    lv_obj_set_size(main_cont, lv_pct(94), UI_PAGE_HEIGHT);
+    lv_obj_align(main_cont,
+                 LV_ALIGN_BOTTOM_MID,
+                 0,
+                 -UI_MAIN_BOTTOM_PAD);
     lv_obj_set_style_bg_opa(main_cont, 0, 0);
     lv_obj_set_style_border_width(main_cont, 0, 0);
-    lv_obj_remove_flag(main_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(main_cont, 0, 0);
+    lv_obj_add_flag(main_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(main_cont, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(main_cont, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_flex_flow(main_cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(main_cont,
                           LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(main_cont, 8, 0);
+    lv_obj_set_style_pad_row(main_cont, 5, 0);
 
     return main_cont;
 }
 
 /**
- * @brief 创建颜色预览区域和 part 标签。
+ * @brief Create a full-page content container.
  *
- * @param parent 主内容容器。
- * @note part 标签放在颜色预览块中间，颜色由当前 UI 缓存初始化。
+ * @param screen Active screen object.
+ * @return Created page container, or NULL on allocation failure.
+ */
+static lv_obj_t *build_page_container(lv_obj_t *screen)
+{
+    lv_obj_t *page = lv_obj_create(screen);
+
+    lv_obj_set_size(page, lv_pct(94), UI_PAGE_HEIGHT);
+    lv_obj_align(page, LV_ALIGN_BOTTOM_MID, 0, -UI_MAIN_BOTTOM_PAD);
+    lv_obj_set_style_bg_opa(page, 0, 0);
+    lv_obj_set_style_border_width(page, 0, 0);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_add_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(page, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_AUTO);
+
+    return page;
+}
+
+/**
+ * @brief Create the color preview block and external part label.
+ *
+ * @param parent Main content container.
  */
 static void build_color_preview(lv_obj_t *parent)
 {
     ui_rgb_color_t color = {0};
     (void)ui_get_color(&color);
 
+    s_part_label = lv_label_create(parent);
+    ui_apply_text_style(s_part_label, lv_color_hex(0xAAAAAA));
+    lv_obj_set_width(s_part_label, lv_pct(100));
+    lv_obj_set_style_text_align(s_part_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_long_mode(s_part_label, LV_LABEL_LONG_DOT);
+
     s_color_preview = lv_obj_create(parent);
-    lv_obj_set_size(s_color_preview, lv_pct(100), 55);
-    lv_obj_set_style_radius(s_color_preview, 10, 0);
+    lv_obj_set_size(s_color_preview, lv_pct(100), 44);
+    lv_obj_set_style_radius(s_color_preview, 8, 0);
     lv_obj_set_style_border_width(s_color_preview, 2, 0);
     lv_obj_set_style_border_color(s_color_preview,
                                   lv_color_hex(0x555555),
@@ -336,15 +506,165 @@ static void build_color_preview(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_color_preview,
                               lv_color_make(color.r, color.g, color.b),
                               0);
+    lv_obj_remove_flag(s_color_preview, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_part_label = lv_label_create(s_color_preview);
-    lv_obj_center(s_part_label);
-    lv_obj_set_style_text_font(s_part_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_bg_opa(s_part_label, 100, 0);
-    lv_obj_set_style_bg_color(s_part_label, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_pad_all(s_part_label, 4, 0);
-    lv_obj_set_style_radius(s_part_label, 5, 0);
     ui_update_part_id(s_current_part);
+}
+
+/**
+ * @brief Convert bytes to KiB using integer rounding down.
+ *
+ * @param bytes Byte count.
+ * @return KiB count.
+ */
+static uint32_t ui_bytes_to_kib(size_t bytes)
+{
+    return (uint32_t)(bytes / 1024U);
+}
+
+/**
+ * @brief Calculate per-core CPU busy percentage from idle run-time counters.
+ *
+ * @param busy Output array with one entry per displayed CPU core.
+ * @param count Number of entries in busy.
+ */
+static void ui_get_cpu_busy_percent(uint32_t *busy, uint32_t count)
+{
+    if (busy == NULL) {
+        return;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+    int64_t elapsed_us = now_us - s_cpu_monitor.last_time_us;
+
+    for (uint32_t i = 0U; i < count; i++) {
+        configRUN_TIME_COUNTER_TYPE idle =
+            ulTaskGetIdleRunTimeCounterForCore((BaseType_t)i);
+        configRUN_TIME_COUNTER_TYPE idle_delta =
+            idle - s_cpu_monitor.last_idle[i];
+
+        busy[i] = 0U;
+        if ((s_cpu_monitor.last_time_us > 0) && (elapsed_us > 0)) {
+            uint64_t idle_pct = ((uint64_t)idle_delta * 100ULL) /
+                                (uint64_t)elapsed_us;
+            if (idle_pct < 100ULL) {
+                busy[i] = (uint32_t)(100ULL - idle_pct);
+            }
+        }
+
+        s_cpu_monitor.last_idle[i] = idle;
+    }
+
+    s_cpu_monitor.last_time_us = now_us;
+}
+
+/**
+ * @brief Refresh system monitor labels.
+ *
+ * @param timer LVGL timer object, unused.
+ */
+static void perf_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+
+    if ((s_system_page == NULL) ||
+        (s_perf_labels[UI_PERF_CPU0] == NULL) ||
+        (s_perf_labels[UI_PERF_CPU1] == NULL) ||
+        (s_perf_labels[UI_PERF_HEAP] == NULL) ||
+        (s_perf_labels[UI_PERF_INTERNAL_HEAP] == NULL) ||
+        (s_perf_labels[UI_PERF_BIGGEST_BLOCK] == NULL) ||
+        (s_perf_labels[UI_PERF_MIN_HEAP] == NULL) ||
+        (s_perf_labels[UI_PERF_LVGL_MEM] == NULL) ||
+        (s_perf_labels[UI_PERF_UPTIME] == NULL)) {
+        return;
+    }
+
+    uint32_t cpu_busy[UI_PERF_CPU_CORES] = {0U};
+    uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    lv_mem_monitor_t lv_mem = {0};
+
+    ui_get_cpu_busy_percent(cpu_busy, UI_PERF_CPU_CORES);
+    lv_mem_monitor(&lv_mem);
+
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_CPU0],
+                          "CPU1占用：%lu%%",
+                          (unsigned long)cpu_busy[0]);
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_CPU1],
+                          "CPU2占用：%lu%%",
+                          (unsigned long)cpu_busy[1]);
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_HEAP],
+                          "堆剩余：%lu KB",
+                          (unsigned long)ui_bytes_to_kib(
+                              esp_get_free_heap_size()));
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_INTERNAL_HEAP],
+                          "内部RAM：%lu KB",
+                          (unsigned long)ui_bytes_to_kib(
+                              heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_BIGGEST_BLOCK],
+                          "最大连续块：%lu KB",
+                          (unsigned long)ui_bytes_to_kib(
+                              heap_caps_get_largest_free_block(
+                                  MALLOC_CAP_INTERNAL)));
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_MIN_HEAP],
+                          "历史最低堆：%lu KB",
+                          (unsigned long)ui_bytes_to_kib(
+                              esp_get_minimum_free_heap_size()));
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_LVGL_MEM],
+                          "LVGL内存：%u%% 碎片%u%%",
+                          lv_mem.used_pct,
+                          lv_mem.frag_pct);
+    lv_label_set_text_fmt(s_perf_labels[UI_PERF_UPTIME],
+                          "运行时间：%lu秒",
+                          (unsigned long)uptime_s);
+}
+
+/**
+ * @brief Create one monitor row label.
+ *
+ * @param parent Parent page container.
+ * @param index Monitor item index.
+ */
+static void create_perf_label(lv_obj_t *parent, ui_perf_item_t index)
+{
+    s_perf_labels[index] = lv_label_create(parent);
+    if (s_perf_labels[index] == NULL) {
+        return;
+    }
+
+    ui_apply_text_style(s_perf_labels[index], lv_color_hex(0xFFFFFF));
+    lv_obj_set_width(s_perf_labels[index], lv_pct(100));
+    lv_obj_set_style_text_align(s_perf_labels[index], LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_long_mode(s_perf_labels[index], LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_perf_labels[index], "--");
+}
+
+/**
+ * @brief Build the system monitor page.
+ *
+ * @param parent Page container.
+ */
+static void build_system_page(lv_obj_t *parent)
+{
+    lv_obj_t *title = lv_label_create(parent);
+
+    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(parent,
+                          LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(parent, 6, 0);
+
+    ui_apply_text_style(title, lv_color_hex(0xA5D6FF));
+    lv_label_set_text(title, "系统监控");
+
+    for (uint32_t i = 0U; i < UI_PERF_ITEM_COUNT; i++) {
+        create_perf_label(parent, (ui_perf_item_t)i);
+    }
+
+    s_perf_timer = lv_timer_create(perf_timer_cb,
+                                   UI_PERF_TIMER_PERIOD_MS,
+                                   NULL);
+    perf_timer_cb(s_perf_timer);
 }
 
 /**
@@ -356,31 +676,35 @@ static void build_color_picker_ui(void)
 {
     ui_rgb_color_t color = {0};
     lv_obj_t *screen = lv_scr_act();
-    lv_obj_t *main_cont = NULL;
 
     (void)ui_get_color(&color);
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x1E1E1E), 0);
     build_header(screen);
-    main_cont = build_main_container(screen);
-    build_color_preview(main_cont);
-    create_color_slider(main_cont,
-                        "R",
+
+    s_color_page = build_main_container(screen);
+    build_color_preview(s_color_page);
+    create_color_slider(s_color_page,
+                        "红",
                         lv_color_hex(0xFF4444),
                         &s_slider_r,
                         &s_label_r,
                         color.r);
-    create_color_slider(main_cont,
-                        "G",
+    create_color_slider(s_color_page,
+                        "绿",
                         lv_color_hex(0x44FF44),
                         &s_slider_g,
                         &s_label_g,
                         color.g);
-    create_color_slider(main_cont,
-                        "B",
+    create_color_slider(s_color_page,
+                        "蓝",
                         lv_color_hex(0x4444FF),
                         &s_slider_b,
                         &s_label_b,
                         color.b);
+
+    s_system_page = build_page_container(screen);
+    build_system_page(s_system_page);
+    ui_show_page(UI_PAGE_COLOR);
 }
 
 /**

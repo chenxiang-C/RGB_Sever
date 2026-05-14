@@ -6,7 +6,6 @@
 #include "esp_err.h"
 
 #define SLAVE_MAGIC_NUMBER      (0x2U)
-#define HOST_MAC_ADDR           {0x10, 0x51, 0xdb, 0x83, 0xe8, 0x2c}
 #define ESPNOW_PMK              "ESP32_HOST_SLAVE_PMK"
 #define ESPNOW_CHANNEL          (1U)
 #define SLAVE_SEND_INTERVAL_MS  (3000U)
