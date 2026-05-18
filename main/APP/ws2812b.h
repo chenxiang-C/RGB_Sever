@@ -6,7 +6,7 @@
 #include "driver/gpio.h"
 
 #define WS2812B_GPIO_PIN  GPIO_NUM_25
-#define WS2812B_LED_NUM   (6U)
+#define WS2812B_LED_NUM   (5U)
 
 /**
  * @brief 初始化 WS2812B 灯带 RMT 驱动。

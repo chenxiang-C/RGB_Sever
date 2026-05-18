@@ -22,7 +22,9 @@ static const char *TAG = "lvgl_base";
 #define UI_DEFAULT_G             (0U)
 #define UI_DEFAULT_B             (0U)
 #define UI_SLIDER_MAX            (255U)
-#define UI_LVGL_BUF_LINES           (10U)
+#define UI_LVGL_BUF_LINES_FAST      (40U)
+#define UI_LVGL_BUF_LINES_MID       (20U)
+#define UI_LVGL_BUF_LINES_FALLBACK  (10U)
 #define UI_LVGL_LOCK_TIMEOUT_MS     (50U)
 #define UI_LVGL_TASK_DELAY_MS       (10U)
 #define UI_TOUCH_PHYSICAL_WIDTH     (240)
@@ -91,6 +93,7 @@ static ui_cpu_monitor_t s_cpu_monitor;
 static void lvgl_disp_flush_cb(lv_display_t *disp,
                                const lv_area_t *area,
                                uint8_t *color_map);
+static void lvgl_flush_ready_cb(void *user_ctx);
 static void touchpad_read(lv_indev_t *indev, lv_indev_data_t *data);
 static void increase_lvgl_tick(void *arg);
 
@@ -154,10 +157,10 @@ static void ui_give_lvgl(void)
 }
 
 /**
- * @brief Apply the common Chinese UI font and text color.
+ * @brief 应用通用中文 UI 字体和文本颜色。
  *
- * @param obj LVGL object to style.
- * @param color Text color.
+ * @param obj 待设置样式的 LVGL 对象。
+ * @param color 文本颜色。
  */
 static void ui_apply_text_style(lv_obj_t *obj, lv_color_t color)
 {
@@ -170,7 +173,7 @@ static void ui_apply_text_style(lv_obj_t *obj, lv_color_t color)
 }
 
 /**
- * @brief Refresh the page toggle button text.
+ * @brief 刷新页面切换按钮文本。
  */
 static void ui_update_page_button_text(void)
 {
@@ -186,9 +189,9 @@ static void ui_update_page_button_text(void)
 }
 
 /**
- * @brief Show one of the two UI pages.
+ * @brief 显示两个 UI 页面中的一个。
  *
- * @param page Target page.
+ * @param page 目标页面。
  */
 static void ui_show_page(ui_page_t page)
 {
@@ -214,9 +217,9 @@ static void ui_show_page(ui_page_t page)
 }
 
 /**
- * @brief Page switch button event callback.
+ * @brief 页面切换按钮事件回调。
  *
- * @param event LVGL event object.
+ * @param event LVGL 事件对象。
  */
 static void page_button_event_cb(lv_event_t *event)
 {
@@ -244,11 +247,7 @@ static void slider_event_cb(lv_event_t *event)
         .g = (uint8_t)lv_slider_get_value(s_slider_g),
         .b = (uint8_t)lv_slider_get_value(s_slider_b),
     };
-    static uint32_t s_last_update_time;
-    uint32_t current_time = (uint32_t)xTaskGetTickCount() *
-                            (uint32_t)portTICK_PERIOD_MS;
-    lv_event_code_t code = lv_event_get_code(event);
-
+    (void)event;
     ui_set_color(color.r, color.g, color.b);
 
     lv_label_set_text_fmt(s_label_r, "红 %u", color.r);
@@ -258,10 +257,6 @@ static void slider_event_cb(lv_event_t *event)
                               lv_color_make(color.r, color.g, color.b),
                               0);
 
-    if ((code == LV_EVENT_RELEASED) ||
-        ((current_time - s_last_update_time) > 30U)) {
-        s_last_update_time = current_time;
-    }
 }
 
 /**
@@ -299,7 +294,7 @@ void ui_update_part_id(uint16_t part_id)
 /**
  * @brief 更新主机连接状态标签显示。
  *
- * @param is_connected true 显示 Online，false 显示 Offline。
+ * @param is_connected true 显示在线，false 显示离线。
  * @note 可由 ESP-NOW 任务调用，内部使用 LVGL 互斥锁保护。
  */
 void ui_update_slave_status(bool is_connected)
@@ -459,10 +454,10 @@ static lv_obj_t *build_main_container(lv_obj_t *screen)
 }
 
 /**
- * @brief Create a full-page content container.
+ * @brief 创建整页内容容器。
  *
- * @param screen Active screen object.
- * @return Created page container, or NULL on allocation failure.
+ * @param screen 当前活动屏幕对象。
+ * @return 创建成功的页面容器，分配失败时返回 NULL。
  */
 static lv_obj_t *build_page_container(lv_obj_t *screen)
 {
@@ -481,9 +476,9 @@ static lv_obj_t *build_page_container(lv_obj_t *screen)
 }
 
 /**
- * @brief Create the color preview block and external part label.
+ * @brief 创建颜色预览块和外部 part 标签。
  *
- * @param parent Main content container.
+ * @param parent 主内容容器。
  */
 static void build_color_preview(lv_obj_t *parent)
 {
@@ -512,10 +507,10 @@ static void build_color_preview(lv_obj_t *parent)
 }
 
 /**
- * @brief Convert bytes to KiB using integer rounding down.
+ * @brief 将字节数向下取整转换为 KiB。
  *
- * @param bytes Byte count.
- * @return KiB count.
+ * @param bytes 字节数。
+ * @return KiB 数值。
  */
 static uint32_t ui_bytes_to_kib(size_t bytes)
 {
@@ -523,15 +518,19 @@ static uint32_t ui_bytes_to_kib(size_t bytes)
 }
 
 /**
- * @brief Calculate per-core CPU busy percentage from idle run-time counters.
+ * @brief 根据空闲任务运行计数计算每个 CPU 核心的忙碌百分比。
  *
- * @param busy Output array with one entry per displayed CPU core.
- * @param count Number of entries in busy.
+ * @param busy 输出数组，每个元素对应一个显示的 CPU 核心。
+ * @param count busy 数组元素数量。
  */
 static void ui_get_cpu_busy_percent(uint32_t *busy, uint32_t count)
 {
     if (busy == NULL) {
         return;
+    }
+
+    if (count > UI_PERF_CPU_CORES) {
+        count = UI_PERF_CPU_CORES;
     }
 
     int64_t now_us = esp_timer_get_time();
@@ -559,9 +558,9 @@ static void ui_get_cpu_busy_percent(uint32_t *busy, uint32_t count)
 }
 
 /**
- * @brief Refresh system monitor labels.
+ * @brief 刷新系统监控标签。
  *
- * @param timer LVGL timer object, unused.
+ * @param timer LVGL 定时器对象，当前未使用。
  */
 static void perf_timer_cb(lv_timer_t *timer)
 {
@@ -619,10 +618,10 @@ static void perf_timer_cb(lv_timer_t *timer)
 }
 
 /**
- * @brief Create one monitor row label.
+ * @brief 创建一行监控标签。
  *
- * @param parent Parent page container.
- * @param index Monitor item index.
+ * @param parent 父页面容器。
+ * @param index 监控项索引。
  */
 static void create_perf_label(lv_obj_t *parent, ui_perf_item_t index)
 {
@@ -639,9 +638,9 @@ static void create_perf_label(lv_obj_t *parent, ui_perf_item_t index)
 }
 
 /**
- * @brief Build the system monitor page.
+ * @brief 构建系统监控页面。
  *
- * @param parent Page container.
+ * @param parent 页面容器。
  */
 static void build_system_page(lv_obj_t *parent)
 {
@@ -726,16 +725,35 @@ static bool lv_port_disp_init(void)
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, lvgl_disp_flush_cb);
 
-    size_t buf_size_bytes = LCD_WIDTH * UI_LVGL_BUF_LINES *
-                            sizeof(uint16_t);
-    void *buf_1 = heap_caps_malloc(buf_size_bytes,
-                                   MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    void *buf_2 = heap_caps_malloc(buf_size_bytes,
-                                   MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    const uint32_t candidate_lines[] = {
+        UI_LVGL_BUF_LINES_FAST,
+        UI_LVGL_BUF_LINES_MID,
+        UI_LVGL_BUF_LINES_FALLBACK,
+    };
+    size_t buf_size_bytes = 0U;
+    void *buf_1 = NULL;
+    void *buf_2 = NULL;
+
+    for (uint32_t i = 0U;
+         (i < (sizeof(candidate_lines) / sizeof(candidate_lines[0]))) &&
+         ((buf_1 == NULL) || (buf_2 == NULL));
+         i++) {
+        buf_size_bytes = LCD_WIDTH * candidate_lines[i] *
+                         sizeof(uint16_t);
+        buf_1 = heap_caps_malloc(buf_size_bytes,
+                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        buf_2 = heap_caps_malloc(buf_size_bytes,
+                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if ((buf_1 == NULL) || (buf_2 == NULL)) {
+            heap_caps_free(buf_1);
+            heap_caps_free(buf_2);
+            buf_1 = NULL;
+            buf_2 = NULL;
+        }
+    }
+
     if ((buf_1 == NULL) || (buf_2 == NULL)) {
         ESP_LOGE(TAG, "LVGL DMA buffer allocation failed");
-        heap_caps_free(buf_1);
-        heap_caps_free(buf_2);
         return false;
     }
 
@@ -796,14 +814,36 @@ static void lvgl_disp_flush_cb(lv_display_t *disp,
     uint32_t pixel_count = (uint32_t)width * (uint32_t)height;
     uint16_t *color16 = (uint16_t *)color_map;
 
-    (void)disp;
     for (uint32_t i = 0U; i < pixel_count; i++) {
         color16[i] = (uint16_t)((color16[i] >> 8U) |
                                 (color16[i] << 8U));
     }
 
-    LCD_DrawBitmap_DMA(area->x1, area->y1, width, height, color16);
-    lv_display_flush_ready(disp);
+    esp_err_t ret = LCD_DrawBitmap_DMA_Async((uint16_t)area->x1,
+                                             (uint16_t)area->y1,
+                                             width,
+                                             height,
+                                             color16,
+                                             lvgl_flush_ready_cb,
+                                             disp);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "LCD async flush failed: %s", esp_err_to_name(ret));
+        LCD_DrawBitmap_DMA((uint16_t)area->x1,
+                           (uint16_t)area->y1,
+                           width,
+                           height,
+                           color16);
+        lv_display_flush_ready(disp);
+    }
+}
+
+static void lvgl_flush_ready_cb(void *user_ctx)
+{
+    lv_display_t *disp = (lv_display_t *)user_ctx;
+
+    if (disp != NULL) {
+        lv_display_flush_ready(disp);
+    }
 }
 
 /**
@@ -867,6 +907,7 @@ static bool lvgl_timer_init(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_timer_start_periodic failed: %s",
                  esp_err_to_name(ret));
+        (void)esp_timer_delete(lvgl_tick);
         return false;
     }
 

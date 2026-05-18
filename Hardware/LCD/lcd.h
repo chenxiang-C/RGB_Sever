@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "esp_err.h"
+
 #define LCD_HOST        SPI2_HOST
 #define LCD_PIN_MOSI    23
 #define LCD_PIN_MISO    -1
@@ -28,6 +30,8 @@
 #define GREEN           0x07E0
 #define CYAN            0x7FFF
 #define YELLOW          0xFFE0
+
+typedef void (*lcd_trans_done_cb_t)(void *user_ctx);
 
 /**
  * @brief 初始化 LCD SPI 总线、控制引脚和屏幕寄存器。
@@ -95,5 +99,26 @@ void LCD_DrawBitmap_DMA(uint16_t x,
                         uint16_t width,
                         uint16_t height,
                         const uint16_t *bitmap);
+
+/**
+ * @brief 将 RGB565 位图数据异步绘制到指定区域。
+ *
+ * @param x 起始 X 坐标。
+ * @param y 起始 Y 坐标。
+ * @param width 位图宽度。
+ * @param height 位图高度。
+ * @param bitmap RGB565 像素数据指针，长度至少为 width * height。
+ * @param done_cb SPI DMA 传输完成回调，可为 NULL。
+ * @param user_ctx 传递给 done_cb 的用户上下文。
+ * @return 成功入队返回 ESP_OK，否则返回具体错误码。
+ * @note bitmap 指针必须在 done_cb 调用前保持有效。
+ */
+esp_err_t LCD_DrawBitmap_DMA_Async(uint16_t x,
+                                   uint16_t y,
+                                   uint16_t width,
+                                   uint16_t height,
+                                   const uint16_t *bitmap,
+                                   lcd_trans_done_cb_t done_cb,
+                                   void *user_ctx);
 
 #endif /* LCD_H */

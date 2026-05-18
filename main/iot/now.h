@@ -5,7 +5,7 @@
 
 #include "esp_err.h"
 
-#define SLAVE_MAGIC_NUMBER      (0x2U)
+#define SLAVE_MAGIC_NUMBER      (0x4U)
 #define ESPNOW_PMK              "ESP32_HOST_SLAVE_PMK"
 #define ESPNOW_CHANNEL          (1U)
 #define SLAVE_SEND_INTERVAL_MS  (3000U)

@@ -46,7 +46,7 @@ static esp_err_t ft_read_reg(uint8_t reg, uint8_t *data, uint8_t len)
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, FT_CMD_WR, true);
     i2c_master_write_byte(cmd, reg, true);
-    i2c_master_start(cmd); // Repeated start
+    i2c_master_start(cmd); // 重复起始信号
     i2c_master_write_byte(cmd, FT_CMD_RD, true);
     i2c_master_read(cmd, data, len, I2C_MASTER_LAST_NACK);
     i2c_master_stop(cmd);

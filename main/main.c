@@ -6,13 +6,15 @@ static const char *TAG = "main";
 #define MAIN_ESPNOW_EVENT_STACK    (4096U)
 #define MAIN_ESPNOW_SEND_STACK     (4U * 1024U)
 #define MAIN_HEARTBEAT_STACK       (2U * 1024U)
+#define MAIN_LED_STACK             (4U * 1024U)
 #define MAIN_LVGL_PRIORITY         (3U)
 #define MAIN_ESPNOW_EVENT_PRIORITY (4U)
 #define MAIN_ESPNOW_SEND_PRIORITY  (3U)
 #define MAIN_HEARTBEAT_PRIORITY    (3U)
+#define MAIN_LED_PRIORITY          (3U)
 #define MAIN_CORE_WIFI             (0)
 #define MAIN_CORE_UI               (1)
-#define MAIN_TASK_COUNT            (4U)
+#define MAIN_TASK_COUNT            (5U)
 
 typedef struct {
     TaskFunction_t entry;
@@ -103,6 +105,13 @@ static esp_err_t app_create_tasks(void)
             .stack_depth = MAIN_HEARTBEAT_STACK,
             .priority = MAIN_HEARTBEAT_PRIORITY,
             .core_id = MAIN_CORE_WIFI,
+        },
+        {
+            .entry = led_task,
+            .name = "led_task",
+            .stack_depth = MAIN_LED_STACK,
+            .priority = MAIN_LED_PRIORITY,
+            .core_id = MAIN_CORE_UI,
         },
     };
 

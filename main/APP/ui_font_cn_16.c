@@ -1,7 +1,7 @@
 /*******************************************************************************
- * Size: 16 px
- * Bpp: 4
- * Opts: --font C:\Windows\Fonts\simhei.ttf --range 0x20-0x7E --symbols 系统调色节点在线离线绘制部位：未分配红绿蓝监控占用堆剩余内部最大连续块历史最低内存碎片率任务数量运行时间秒主机等待连接已 --size 16 --bpp 4 --format lvgl --no-compress --no-prefilter --no-kerning --lv-font-name ui_font_cn_16 --output main/APP/ui_font_cn_16.c
+ * 尺寸：16 px
+ * 位深：4
+ * 生成选项：--font C:\Windows\Fonts\simhei.ttf --range 0x20-0x7E --symbols 系统调色节点在线离线绘制部位：未分配红绿蓝监控占用堆剩余内部最大连续块历史最低内存碎片率任务数量运行时间秒主机等待连接已 --size 16 --bpp 4 --format lvgl --no-compress --no-prefilter --no-kerning --lv-font-name ui_font_cn_16 --output main/APP/ui_font_cn_16.c
  ******************************************************************************/
 
 #ifdef __has_include
@@ -25,10 +25,10 @@
 #if UI_FONT_CN_16
 
 /*-----------------
- *    BITMAPS
+ *    位图数据
  *----------------*/
 
-/*Store the image of the glyphs*/
+/* 存储字形位图 */
 static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     /* U+0020 " " */
 
@@ -1596,11 +1596,11 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
 
 
 /*---------------------
- *  GLYPH DESCRIPTION
+ *  字形描述
  *--------------------*/
 
 static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
-    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
+    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 保留 */,
     {.bitmap_index = 0, .adv_w = 128, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0},
     {.bitmap_index = 0, .adv_w = 128, .box_w = 2, .box_h = 12, .ofs_x = 3, .ofs_y = 0},
     {.bitmap_index = 12, .adv_w = 128, .box_w = 4, .box_h = 4, .ofs_x = 2, .ofs_y = 8},
@@ -1754,7 +1754,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
 };
 
 /*---------------------
- *  CHARACTER MAPPING
+ *  字符映射
  *--------------------*/
 
 static const uint16_t unicode_list_1[] = {
@@ -1767,7 +1767,7 @@ static const uint16_t unicode_list_1[] = {
     0x4195, 0x41a3, 0x42ad, 0x4312, 0x4394, 0x47b9, 0xb0df
 };
 
-/*Collect the unicode lists and glyph_id offsets*/
+/* 汇总 Unicode 列表和字形 ID 偏移 */
 static const lv_font_fmt_txt_cmap_t cmaps[] =
 {
     {
@@ -1783,11 +1783,11 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
 
 
 /*--------------------
- *  ALL CUSTOM DATA
+ *  全部自定义数据
  *--------------------*/
 
 #if LVGL_VERSION_MAJOR == 8
-/*Store all the custom data of the font*/
+/* 存储字体的全部自定义数据 */
 static  lv_font_fmt_txt_glyph_cache_t cache;
 #endif
 
@@ -1813,19 +1813,19 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
 
 
 /*-----------------
- *  PUBLIC FONT
+ *  公共字体
  *----------------*/
 
-/*Initialize a public general font descriptor*/
+/* 初始化公共通用字体描述符 */
 #if LVGL_VERSION_MAJOR >= 8
 const lv_font_t ui_font_cn_16 = {
 #else
 lv_font_t ui_font_cn_16 = {
 #endif
-    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,    /*Function pointer to get glyph's data*/
-    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,    /*Function pointer to get glyph's bitmap*/
-    .line_height = 19,          /*The maximum line height required by the font*/
-    .base_line = 3,             /*Baseline measured from the bottom of the line*/
+    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,    /* 获取字形数据的函数指针 */
+    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,    /* 获取字形位图的函数指针 */
+    .line_height = 19,          /* 字体需要的最大行高 */
+    .base_line = 3,             /* 从行底部开始计算的基线位置 */
 #if !(LVGL_VERSION_MAJOR == 6 && LVGL_VERSION_MINOR == 0)
     .subpx = LV_FONT_SUBPX_NONE,
 #endif
@@ -1833,7 +1833,7 @@ lv_font_t ui_font_cn_16 = {
     .underline_position = -1,
     .underline_thickness = 1,
 #endif
-    .dsc = &font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
+    .dsc = &font_dsc,          /* 自定义字体数据，由 get_glyph_bitmap/dsc 访问 */
 #if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
     .fallback = NULL,
 #endif
@@ -1842,4 +1842,4 @@ lv_font_t ui_font_cn_16 = {
 
 
 
-#endif /*#if UI_FONT_CN_16*/
+#endif /* UI_FONT_CN_16 字体开关 */

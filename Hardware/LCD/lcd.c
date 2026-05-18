@@ -7,15 +7,24 @@
 #include "esp_heap_caps.h"
 #include <string.h>
 
+typedef struct {
+    int dc_level;
+    lcd_trans_done_cb_t done_cb;
+    void *user_ctx;
+} lcd_spi_trans_ctx_t;
+
 // 声明日志输出标签
 static const char *TAG = "LCD_DMA";
 // 声明串行外设接口控制句柄
 static spi_device_handle_t spi;
 
 // 定义直接内存访问单次传输的最大像素点数量
-#define DMA_BUFFER_PIXELS 8192
+#define DMA_BUFFER_PIXELS (LCD_WIDTH * 40U)
 // 声明直接内存访问数据缓冲区指针
-static uint16_t *dma_buffer = NULL; 
+static uint16_t *dma_buffer = NULL;
+static spi_transaction_t s_async_trans;
+static lcd_spi_trans_ctx_t s_async_ctx;
+static volatile bool s_async_trans_in_progress;
 
 // 传输前回调函数用于硬件底层自动切换数据命令引脚电平
 /**
@@ -26,8 +35,30 @@ static uint16_t *dma_buffer = NULL;
  */
 static void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
-    int dc = (int)t->user;
-    gpio_set_level(LCD_PIN_DC, dc);
+    const lcd_spi_trans_ctx_t *ctx = (const lcd_spi_trans_ctx_t *)t->user;
+
+    if (ctx != NULL) {
+        gpio_set_level(LCD_PIN_DC, ctx->dc_level);
+    }
+}
+
+/**
+ * @brief SPI 传输完成回调，用于通知异步调用方。
+ *
+ * @param t SPI 传输描述符，user 字段保存传输上下文。
+ * @note 该回调运行在 SPI 驱动回调上下文，只做完成通知。
+ */
+static void lcd_spi_post_transfer_callback(spi_transaction_t *t)
+{
+    const lcd_spi_trans_ctx_t *ctx = (const lcd_spi_trans_ctx_t *)t->user;
+
+    if (ctx == &s_async_ctx) {
+        s_async_trans_in_progress = false;
+    }
+
+    if ((ctx != NULL) && (ctx->done_cb != NULL)) {
+        ctx->done_cb(ctx->user_ctx);
+    }
 }
 
 // 向屏幕发送八位控制命令
@@ -39,10 +70,14 @@ static void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 static void LCD_WR_REG(uint8_t cmd)
 {
     spi_transaction_t t;
+    lcd_spi_trans_ctx_t ctx = {
+        .dc_level = 0,
+    };
+
     memset(&t, 0, sizeof(t));
     t.length = 8;
     t.tx_buffer = &cmd;
-    t.user = (void*)0;
+    t.user = &ctx;
     spi_device_polling_transmit(spi, &t);
 }
 
@@ -55,10 +90,14 @@ static void LCD_WR_REG(uint8_t cmd)
 static void LCD_WR_DATA(uint8_t data)
 {
     spi_transaction_t t;
+    lcd_spi_trans_ctx_t ctx = {
+        .dc_level = 1,
+    };
+
     memset(&t, 0, sizeof(t));
     t.length = 8;
     t.tx_buffer = &data;
-    t.user = (void*)1;
+    t.user = &ctx;
     spi_device_polling_transmit(spi, &t);
 }
 
@@ -73,10 +112,14 @@ static void Lcd_WriteData_16Bit(uint16_t Data)
 {
     uint16_t swapped = (Data >> 8) | (Data << 8);
     spi_transaction_t t;
+    lcd_spi_trans_ctx_t ctx = {
+        .dc_level = 1,
+    };
+
     memset(&t, 0, sizeof(t));
     t.length = 16;
     t.tx_buffer = &swapped;
-    t.user = (void*)1;
+    t.user = &ctx;
     spi_device_polling_transmit(spi, &t);
 }
 
@@ -119,9 +162,17 @@ void LCD_SetWindows(uint16_t xStar, uint16_t yStar, uint16_t xEnd, uint16_t yEnd
  */
 void LCD_Fill_DMA(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t color)
 {
+    if (dma_buffer == NULL) {
+        ESP_LOGE(TAG, "DMA buffer is not initialized");
+        return;
+    }
+
     uint16_t width = ex - sx + 1;
     uint16_t height = ey - sy + 1;
     uint32_t total_pixels = width * height;
+    lcd_spi_trans_ctx_t ctx = {
+        .dc_level = 1,
+    };
     
     LCD_SetWindows(sx, sy, ex, ey);
     
@@ -141,7 +192,7 @@ void LCD_Fill_DMA(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t c
         memset(&t, 0, sizeof(t));
         t.length = send_now * 16;
         t.tx_buffer = dma_buffer;
-        t.user = (void*)1;
+        t.user = &ctx;
         spi_device_polling_transmit(spi, &t);
         
         pixels_sent += send_now;
@@ -160,14 +211,59 @@ void LCD_Fill_DMA(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint16_t c
  */
 void LCD_DrawBitmap_DMA(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t *bitmap)
 {
+    lcd_spi_trans_ctx_t ctx = {
+        .dc_level = 1,
+    };
+
     LCD_SetWindows(x, y, x + width - 1, y + height - 1);
     
     spi_transaction_t t;
     memset(&t, 0, sizeof(t));
     t.length = width * height * 16;
     t.tx_buffer = bitmap;
-    t.user = (void*)1;
+    t.user = &ctx;
     spi_device_polling_transmit(spi, &t);
+}
+
+esp_err_t LCD_DrawBitmap_DMA_Async(uint16_t x,
+                                   uint16_t y,
+                                   uint16_t width,
+                                   uint16_t height,
+                                   const uint16_t *bitmap,
+                                   lcd_trans_done_cb_t done_cb,
+                                   void *user_ctx)
+{
+    if ((spi == NULL) || (bitmap == NULL) ||
+        (width == 0U) || (height == 0U) ||
+        ((uint32_t)x + width > LCD_WIDTH) ||
+        ((uint32_t)y + height > LCD_HEIGHT)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_async_trans_in_progress) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    LCD_SetWindows(x, y, x + width - 1, y + height - 1);
+
+    memset(&s_async_trans, 0, sizeof(s_async_trans));
+    s_async_ctx.dc_level = 1;
+    s_async_ctx.done_cb = done_cb;
+    s_async_ctx.user_ctx = user_ctx;
+
+    s_async_trans.length = (uint32_t)width * (uint32_t)height * 16U;
+    s_async_trans.tx_buffer = bitmap;
+    s_async_trans.user = &s_async_ctx;
+
+    s_async_trans_in_progress = true;
+    esp_err_t ret = spi_device_queue_trans(spi,
+                                           &s_async_trans,
+                                           pdMS_TO_TICKS(10));
+    if (ret != ESP_OK) {
+        s_async_trans_in_progress = false;
+    }
+
+    return ret;
 }
 
 // 使用指定颜色覆盖整个屏幕画布
@@ -204,7 +300,9 @@ void LCD_Init(void)
 
     // 向系统申请一块专门用于直接内存访问传输的内部连续内存
     dma_buffer = heap_caps_malloc(DMA_BUFFER_PIXELS * 2, MALLOC_CAP_DMA);
-    if (!dma_buffer) ESP_LOGE(TAG, "DMA allocation failed");
+    if (dma_buffer == NULL) {
+        ESP_LOGE(TAG, "DMA allocation failed");
+    }
 
     // 绑定串行外设接口的输入输出和时钟引脚
     spi_bus_config_t buscfg = {
@@ -222,11 +320,12 @@ void LCD_Init(void)
 
     // 配置通信频率传输模式片选引脚以及取消假读限制
     spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 40 * 1000 * 1000,
+        .clock_speed_hz = 50 * 1000 * 1000,
         .mode = 0,
         .spics_io_num = LCD_PIN_CS,
         .queue_size = 7,
         .pre_cb = lcd_spi_pre_transfer_callback,
+        .post_cb = lcd_spi_post_transfer_callback,
         .flags = SPI_DEVICE_NO_DUMMY | SPI_DEVICE_HALFDUPLEX,
     };
 
